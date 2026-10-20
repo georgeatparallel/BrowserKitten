@@ -272,3 +272,34 @@ test('cancellation also stops waiting for Chrome header setup', async () => {
     assert.match((await pending).error, /cancel host setup/);
   } finally { globalThis.chrome = previous; }
 });
+
+test('offscreen settings use the existing SW storage bridge; read failure disables search and refuses destructive saves', async () => {
+  const previous = globalThis.chrome;
+  let bag = {};
+  const requests = [];
+  globalThis.chrome = { runtime: { sendMessage: async request => {
+    requests.push(request);
+    if (request.action === 'storage_local_get') return { ok: true, result: bag };
+    assert.equal(request.action, 'storage_local_set'); bag = request.values; return { ok: true };
+  } } };
+  try {
+    assert.equal((await loadWebAcquireSettings()).searchProvider, 'parallel');
+    await saveWebAcquireSettings({ searchProvider: 'brave', braveKey: 'saved-brave' });
+    assert.equal((await loadWebAcquireSettings()).searchProvider, 'brave');
+    assert.equal((await loadWebAcquireSettings()).braveKey, 'saved-brave');
+    await saveWebAcquireSettings({ searchProvider: 'disabled' });
+    assert.equal((await loadWebAcquireSettings()).searchProvider, 'disabled');
+    assert.equal((await loadWebAcquireSettings()).braveKey, 'saved-brave');
+    assert.ok(requests.every(r => r.target === 'pawwork-background'));
+    assert.deepEqual(requests[0].keys, ['pagewand_web_acquire']);
+    for (const fail of [async () => { throw new Error('bridge unavailable'); }, async () => ({ ok: false }), async () => ({ ok: true })]) {
+      chrome.runtime.sendMessage = fail;
+      const settings = await loadWebAcquireSettings(); assert.equal(settings.searchProvider, 'disabled');
+      const c = caller({ settings, fetchImpl: () => { throw new Error('must stay offline'); } });
+      assert.equal((await c.search('offscreen failure')).code, 'SEARCH_DISABLED');
+      await assert.rejects(saveWebAcquireSettings({ firecrawlKey: 'new' }));
+    }
+    globalThis.chrome = { storage: { local: { get: async () => { throw new Error('disk failure'); } } } };
+    assert.equal((await loadWebAcquireSettings()).searchProvider, 'disabled');
+  } finally { globalThis.chrome = previous; }
+});

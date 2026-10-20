@@ -70,19 +70,34 @@ export function firecrawlConfigured(settings) {
   return Boolean(normalizeWebAcquireSettings(settings).firecrawlKey);
 }
 
+async function readWebAcquireSettings() {
+  if (typeof chrome === 'undefined') return defaultWebAcquireSettings();
+  let bag;
+  if (chrome.storage?.local?.get) {
+    bag = await chrome.storage.local.get(WEB_ACQUIRE_STORAGE_KEY);
+  } else if (chrome.runtime?.sendMessage) {
+    // Offscreen has chrome.runtime, but no chrome.storage. Use the existing SW bridge.
+    const response = await chrome.runtime.sendMessage({
+      target: 'pawwork-background', action: 'storage_local_get', keys: [WEB_ACQUIRE_STORAGE_KEY]
+    });
+    if (!response?.ok) throw new Error(response?.error || 'Web search settings unavailable');
+    bag = response.result;
+  }
+  if (!bag || typeof bag !== 'object' || Array.isArray(bag)) throw new Error('Web search settings unavailable');
+  return normalizeWebAcquireSettings(bag[WEB_ACQUIRE_STORAGE_KEY]);
+}
+
 export async function loadWebAcquireSettings() {
-  const empty = defaultWebAcquireSettings();
   try {
-    if (typeof chrome === 'undefined' || !chrome?.storage?.local?.get) return empty;
-    const bag = await chrome.storage.local.get(WEB_ACQUIRE_STORAGE_KEY);
-    return normalizeWebAcquireSettings(bag?.[WEB_ACQUIRE_STORAGE_KEY]);
+    return await readWebAcquireSettings();
   } catch {
-    return empty;
+    // Unreadable settings might contain Search off or an intentional provider.
+    return normalizeWebAcquireSettings({ searchProvider: 'disabled' });
   }
 }
 
 export async function saveWebAcquireSettings(patch = {}) {
-  const prev = await loadWebAcquireSettings();
+  const prev = await readWebAcquireSettings();
   const take = (key) =>
     Object.prototype.hasOwnProperty.call(patch, key) ? patch[key] : prev[key];
   const next = normalizeWebAcquireSettings({
@@ -94,6 +109,11 @@ export async function saveWebAcquireSettings(patch = {}) {
   });
   if (typeof chrome !== 'undefined' && chrome?.storage?.local?.set) {
     await chrome.storage.local.set({ [WEB_ACQUIRE_STORAGE_KEY]: next });
+  } else if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+    const response = await chrome.runtime.sendMessage({
+      target: 'pawwork-background', action: 'storage_local_set', values: { [WEB_ACQUIRE_STORAGE_KEY]: next }
+    });
+    if (!response?.ok) throw new Error(response?.error || 'Web search settings could not be saved');
   }
   return next;
 }
