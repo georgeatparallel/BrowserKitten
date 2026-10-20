@@ -1,11 +1,17 @@
 /**
- * BYOK web acquire: search (Tavily default, Brave optional) + Firecrawl fetch.
+ * Public web acquire: keyless Parallel search + saved BYOK providers / Firecrawl fetch.
  * Storage key pagewand_web_acquire. Model still only sees acquire search|fetch.
  */
 
 export const WEB_ACQUIRE_STORAGE_KEY = 'pagewand_web_acquire';
 
 export const SEARCH_PROVIDERS = [
+  {
+    id: 'parallel',
+    name: 'Parallel (no key)',
+    baseURL: 'https://search.parallel.ai/mcp',
+    keyPlaceholder: ''
+  },
   {
     id: 'tavily',
     name: 'Tavily',
@@ -22,7 +28,7 @@ export const SEARCH_PROVIDERS = [
 
 export function defaultWebAcquireSettings() {
   return {
-    searchProvider: 'tavily',
+    searchProvider: 'parallel',
     tavilyKey: '',
     tavilyBaseURL: 'https://api.tavily.com',
     braveKey: '',
@@ -38,9 +44,11 @@ function trimStr(v, fallback = '') {
 export function normalizeWebAcquireSettings(raw = {}) {
   const d = defaultWebAcquireSettings();
   const o = raw && typeof raw === 'object' ? raw : {};
-  const provider = String(o.searchProvider || d.searchProvider).toLowerCase();
+  // Old stored settings without a provider can still contain intentional keys.
+  const legacy = o.tavilyKey || o.firecrawlKey ? 'tavily' : o.braveKey ? 'brave' : d.searchProvider;
+  const provider = String(o.searchProvider || legacy).toLowerCase();
   return {
-    searchProvider: provider === 'brave' ? 'brave' : 'tavily',
+    searchProvider: ['parallel', 'tavily', 'brave', 'disabled'].includes(provider) ? provider : 'disabled',
     tavilyKey: trimStr(o.tavilyKey),
     tavilyBaseURL: trimStr(o.tavilyBaseURL, d.tavilyBaseURL).replace(/\/$/, ''),
     braveKey: trimStr(o.braveKey),
@@ -51,6 +59,8 @@ export function normalizeWebAcquireSettings(raw = {}) {
 
 export function searchApiConfigured(settings) {
   const s = normalizeWebAcquireSettings(settings);
+  if (s.searchProvider === 'disabled') return false;
+  if (s.searchProvider === 'parallel') return true;
   if (s.searchProvider === 'brave' && s.braveKey) return true;
   if (s.tavilyKey) return true;
   return Boolean(s.firecrawlKey);
